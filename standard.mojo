@@ -36,11 +36,11 @@ struct StandardBloomFilter:
         self.k = existing.k
         self.bits = existing.bits
 
-    fn _hash_n(self, data: Span[UInt8], n: Int) -> UInt:
-        """Generate the n-th hash using double hashing.
+    fn _compute_hashes(self, data: Span[UInt8]) -> Tuple[UInt64, UInt64]:
+        """Compute the two base hashes needed for double hashing.
 
-        Uses the technique from "Less Hashing, Same Performance" paper.
-        We compute two base hashes and combine them to generate k independent hashes.
+        This should be called once per add/contains operation,
+        not k times as was happening before.
         """
         # Compute primary hash
         var h1 = xxhash.sum64(data)
@@ -51,22 +51,35 @@ struct StandardBloomFilter:
         h2 = h2 * 0x9E3779B97F4A7C15  # Multiply by golden ratio
         h2 ^= h2 >> 33  # Mix bits
 
-        # Standard double hashing: h1 + n * h2
-        # This is proven to work well in practice
-        var hash_val = h1 + UInt64(n) * h2
+        return (h1, h2)
 
+    fn _get_position(self, h1: UInt64, h2: UInt64, n: Int) -> UInt:
+        """Get the n-th position using precomputed hashes.
+
+        Uses the technique from "Less Hashing, Same Performance" paper.
+        Standard double hashing: h1 + n * h2
+        """
+        var hash_val = h1 + UInt64(n) * h2
         return UInt(hash_val % UInt64(self.m))
 
     fn add(mut self, data: Span[UInt8]):
         """Add element using enhanced double hashing - zero allocations."""
+        # Compute hashes once!
+        h1, h2 = self._compute_hashes(data)
+
+        # Use them k times
         for i in range(Int(self.k)):
-            var pos = self._hash_n(data, i)
+            var pos = self._get_position(h1, h2, i)
             self.bits[Int(pos // 64)] |= UInt64(1) << UInt64(pos % 64)
 
     fn contains(self, data: Span[UInt8]) -> Bool:
         """Check if element might be in set using enhanced double hashing."""
+        # Compute hashes once!
+        h1, h2 = self._compute_hashes(data)
+
+        # Use them k times
         for i in range(Int(self.k)):
-            var pos = self._hash_n(data, i)
+            var pos = self._get_position(h1, h2, i)
             if self.bits[Int(pos // 64)] & (UInt64(1) << UInt64(pos % 64)) == 0:
                 return False
         return True
